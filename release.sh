@@ -16,6 +16,7 @@ cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 for ARCH in arm64 x86_64; do
   echo "🔨 Compilando para $ARCH…"
   swiftc -O -swift-version 5 -parse-as-library -target "$ARCH-apple-macos13" \
+    -F /System/Library/PrivateFrameworks -framework DisplayServices \
     main.swift -o "$OUT/Despierto-$ARCH"
 done
 lipo -create "$OUT/Despierto-arm64" "$OUT/Despierto-x86_64" -output "$APP/Contents/MacOS/Despierto"

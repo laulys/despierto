@@ -15,7 +15,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp Info.plist "$APP/Contents/Info.plist"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# DisplayServices (brillo del panel) vive en PrivateFrameworks.
 swiftc -O -swift-version 5 -parse-as-library -target "$(uname -m)-apple-macos13" \
+  -F /System/Library/PrivateFrameworks -framework DisplayServices \
   main.swift -o "$APP/Contents/MacOS/Despierto"
 
 codesign --force --sign - "$APP" >/dev/null 2>&1
