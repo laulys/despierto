@@ -397,6 +397,7 @@ final class Despierto: ObservableObject {
         guard !preview else { return }
         startDate = UserDefaults.standard.object(forKey: "startDate") as? Date
         endDate = UserDefaults.standard.object(forKey: "endDate") as? Date
+        recoverWatchdog()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -430,17 +431,17 @@ final class Despierto: ObservableObject {
         }
         notice = nil
         cancelTimer()
+        let start = Date()
+        let end = minutes.map { start.addingTimeInterval(Double($0) * 60) }
         if System.sudoPmset(1) {
-            if let minutes { startTimer(minutes: minutes) }
+            startWatchdog(until: end)
         } else {
             // Solo la primera vez: una contraseña instala el permiso y activa
             guard runAsAdmin(Self.setupScript(value: 1, rootTimerMinutes: minutes), prompt: Self.setupPrompt) else { return }
             checkSetup()
-            if let minutes, System.passwordless { startTimer(minutes: minutes) }
+            if System.passwordless { startWatchdog(until: end) }
         }
-        let start = Date()
-        saveDates(start: minutes == nil ? nil : start,
-                  end: minutes.map { start.addingTimeInterval(Double($0) * 60) })
+        saveDates(start: minutes == nil ? nil : start, end: end)
         Haptics.tap()
         refresh()
     }
@@ -494,14 +495,40 @@ final class Despierto: ObservableObject {
         return script
     }
 
-    /// Temporizador sin contraseña: un proceso pequeño que sigue aunque cierres la tapa o salgas de la app.
-    private func startTimer(minutes: Int) {
+    /// El vigilante: un proceso pequeño que sigue aunque cierres la tapa o salgas de la app.
+    /// Vuelve a lo normal cuando se acaba la pausa, cuando la batería baja del límite sin cargador
+    /// y cuando el Mac se apaga, se reinicia o cierras sesión (macOS le manda TERM).
+    /// Para cancelarlo sin tocar nada, la app le manda USR1.
+    static func watchdogScript(until end: Date?) -> String {
+        let endEpoch = end.map { Int($0.timeIntervalSince1970) } ?? 0
+        return """
+        END=\(endEpoch); LIMIT=\(lowBatteryLimit)
+        normal() { /usr/bin/sudo -n /usr/bin/pmset -a disablesleep 0; }
+        trap 'kill $! 2>/dev/null; exit 0' USR1
+        trap 'kill $! 2>/dev/null; normal; exit 0' TERM HUP
+        while :; do
+          /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1' || exit 0
+          NOW=$(/bin/date +%s); WAIT=30
+          if [ "$END" -gt 0 ]; then
+            [ "$NOW" -ge "$END" ] && break
+            [ $((END - NOW)) -lt $WAIT ] && WAIT=$((END - NOW))
+          fi
+          BATT=$(/usr/bin/pmset -g batt)
+          case "$BATT" in
+            *"AC Power"*) ;;
+            *) PCT=$(echo "$BATT" | /usr/bin/grep -Eo '[0-9]+%' | /usr/bin/head -1 | /usr/bin/tr -d '%')
+               [ -n "$PCT" ] && [ "$PCT" -le "$LIMIT" ] && break ;;
+          esac
+          /bin/sleep $WAIT & wait $!
+        done
+        normal
+        """
+    }
+
+    private func startWatchdog(until end: Date?) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // Si se cancela (TERM), sale sin tocar nada; si llega al final, vuelve a lo normal.
-        let script = "trap 'kill $! 2>/dev/null; exit 0' TERM; sleep \(minutes * 60) & wait $!; "
-            + "/usr/bin/sudo -n /usr/bin/pmset -a disablesleep 0"
-        process.arguments = ["-c", script, Self.timerMarker]
+        process.arguments = ["-c", Self.watchdogScript(until: end), Self.timerMarker]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -511,6 +538,24 @@ final class Despierto: ObservableObject {
             UserDefaults.standard.set(Int(process.processIdentifier), forKey: "timerPID")
         } catch {
             errorMessage = "No se pudo poner el temporizador: \(error.localizedDescription)"
+        }
+    }
+
+    private var watchdogAlive: Bool {
+        let pid = Int32(UserDefaults.standard.integer(forKey: "timerPID"))
+        return pid > 0 && System.isDespiertoTimer(pid: pid)
+    }
+
+    /// Al abrir la app (p. ej. tras un reinicio): si el Mac sigue despierto pero el vigilante ya no está,
+    /// vuelve a lo normal si la pausa ya se pasó de hora o pone otro vigilante para lo que queda.
+    private func recoverWatchdog() {
+        guard System.sleepDisabled(), System.passwordless, !watchdogAlive else { return }
+        if let endDate, endDate <= Date() {
+            guard System.sudoPmset(0) else { return }
+            saveDates(start: nil, end: nil)
+            notice = "Tu pausa café terminó mientras Despierto estaba cerrado, así que ya volvió a lo normal."
+        } else {
+            startWatchdog(until: endDate)
         }
     }
 
@@ -543,7 +588,7 @@ final class Despierto: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "timerPID")
         timerProcess = nil
         guard pid > 0, System.isDespiertoTimer(pid: pid) else { return }
-        kill(pid, SIGTERM) // el propio temporizador para su `sleep` y sale sin ejecutar nada
+        kill(pid, SIGUSR1) // el vigilante para su `sleep` y sale sin tocar nada
     }
 
     func toggleLaunchAtLogin() {
@@ -575,8 +620,9 @@ final class Despierto: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         needsSetup = !FileManager.default.fileExists(atPath: System.sudoersFile)
 
-        // Si ya no está despierto, o el temporizador se perdió (p. ej. al reiniciar), lo olvidamos.
+        // Si la pausa se pasó de hora y sigue despierto (el vigilante se perdió), vuelve a lo normal.
         let timerLost = endDate.map { $0.timeIntervalSinceNow < -10 } ?? false
+        if isAwake, timerLost, System.sudoPmset(0) { cancelTimer(); isAwake = false }
         if !isAwake || timerLost { saveDates(start: nil, end: nil) }
     }
 

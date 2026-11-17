@@ -31,7 +31,7 @@ Con Despierto eliges cuánto tiempo te vas, cierras la tapa y todo sigue funcion
 - **⏱ Cuenta atrás en la barra de menú**, para que sepas cuánto te queda.
 - **🤖 Vigila Claude Code**: si está abierto y no has activado Despierto, te avisa de que se parará si cierras la tapa.
 - **📱 Sigue en el móvil**: un código QR para abrir Claude en el móvil y continuar tus sesiones de Claude Code.
-- **🔋 Batería a la vista**, con aviso si vas con poca y sin cargador. Y si baja del **10 %** sin cargador, Despierto vuelve solo a lo normal para que el Mac pueda dormirse y no se apague de golpe.
+- **🔋 Batería a la vista**, con aviso si vas con poca y sin cargador. Y si baja del **10 %** sin cargador, Despierto vuelve solo a lo normal para que el Mac pueda dormirse y no se apague de golpe, aunque hayas cerrado la app.
 - **🪟 Cristal transparente**: claro en modo normal y ahumado en negro ceniza cuando está activado. Funciona en modo claro y oscuro.
 - **✨ Animado con calma**: al activarlo, la taza se llena y el vapor se dibuja y sube en bucle. Respeta «Reducir movimiento» de macOS.
 - Opción de **abrirse al iniciar sesión**.
@@ -107,14 +107,20 @@ Como es un ajuste del sistema, **la primera vez** macOS te pide tu contraseña. 
 sudo rm /etc/sudoers.d/despierto
 ```
 
-El temporizador de la pausa café lo lleva un pequeño proceso del sistema. Por eso funciona aunque cierres la tapa o salgas de la app.
+Mientras está activado, un pequeño proceso vigila por detrás. Funciona aunque cierres la tapa o salgas de la app, y vuelve a lo normal cuando:
+
+- se acaba la pausa café,
+- la batería baja del 10 % sin cargador,
+- apagas o reinicias el Mac, o cierras sesión.
+
+Si aun así el Mac se apagó de golpe, al volver a abrir Despierto lo arregla: si la pausa ya había terminado, vuelve a lo normal.
 
 Todo el código está en [`main.swift`](main.swift), con comentarios en español. El icono se dibuja con [`icon.swift`](icon.swift).
 
 ## ⚠️ Ojo
 
 - **No metas el Mac en la mochila** con el modo despierto activado: se puede calentar mucho.
-- Con la tapa cerrada sigue gastando batería, así que mejor enchufado. Si baja del 10 % sin cargador, vuelve solo a lo normal (siempre que la app esté abierta).
+- Con la tapa cerrada sigue gastando batería, así que mejor enchufado. Si baja del 10 % sin cargador, vuelve solo a lo normal, aunque la app esté cerrada.
 - Si eliges **∞ (sin límite)**, acuérdate de volver a lo normal.
 
 ## Publicar una versión nueva
