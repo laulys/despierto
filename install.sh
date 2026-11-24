@@ -9,8 +9,8 @@
 set -euo pipefail
 
 # release.sh actualiza estas dos líneas en cada versión
-VERSION="v2.2.0"
-SHA256="2d53f05c236b94faa1b3ae9cee0bc94bc8d928c162384e09cca933af1bbade0d"
+VERSION="v2.3.0"
+SHA256="11888465ebca88608edaed5b009c771ccdb631cd104b5f70f8b6aed6480362ba"
 URL="https://github.com/laulys/despierto/releases/download/$VERSION/Despierto.zip"
 DEST="${DESPIERTO_DEST:-/Applications}"
 
