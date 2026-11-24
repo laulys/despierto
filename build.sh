@@ -14,6 +14,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp guard.plist "$APP/Contents/Library/LaunchAgents/local.despierto.guard.plist"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 swiftc -O -swift-version 5 -parse-as-library -target "$(uname -m)-apple-macos13" \
   main.swift -o "$APP/Contents/MacOS/Despierto"

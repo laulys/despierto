@@ -3,11 +3,15 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/laulys/despierto/main/install.sh | bash
 #
-# Lee este script antes de ejecutarlo si quieres: solo descarga el zip de la
-# última versión de GitHub, lo descomprime en Aplicaciones y abre la app.
+# Lee este script antes de ejecutarlo si quieres: descarga el zip de la versión de
+# abajo, comprueba que es exactamente el publicado (SHA-256), lo copia en
+# Aplicaciones y abre la app. Si no coincide, no instala nada.
 set -euo pipefail
 
-URL="https://github.com/laulys/despierto/releases/latest/download/Despierto.zip"
+# release.sh actualiza estas dos líneas en cada versión
+VERSION="v2.2.0"
+SHA256="2d53f05c236b94faa1b3ae9cee0bc94bc8d928c162384e09cca933af1bbade0d"
+URL="https://github.com/laulys/despierto/releases/download/$VERSION/Despierto.zip"
 DEST="${DESPIERTO_DEST:-/Applications}"
 
 if [ "$(uname)" != "Darwin" ]; then
@@ -24,8 +28,12 @@ mkdir -p "$DEST"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "☕ Descargando Despierto…"
+echo "☕ Descargando Despierto ${VERSION}…"
 curl -fsSL "$URL" -o "$TMP/Despierto.zip"
+if ! echo "$SHA256  $TMP/Despierto.zip" | shasum -a 256 -c - >/dev/null 2>&1; then
+  echo "❌ El archivo descargado no coincide con el publicado. No se instala nada." >&2
+  exit 1
+fi
 ditto -x -k "$TMP/Despierto.zip" "$TMP"
 
 # Si ya estaba abierta (esta misma copia), la cerramos para poder reemplazarla

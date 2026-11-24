@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Red de seguridad: al iniciar sesión y cada minuto, si Despierto dejó el Mac despierto
+     y su vigilante ya no existe, vuelve a lo normal. Si no lo activó Despierto, no hace nada. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.despierto.guard</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>MARK="$HOME/Library/Application Support/Despierto/activo"
+alive() {
+  PID=$(/bin/cat "$MARK" 2&gt;/dev/null)
+  [ -n "$PID" ] || return 1
+  /bin/ps -ww -p "$PID" -o args= 2&gt;/dev/null | /usr/bin/grep -q 'despierto-timer'
+}
+[ -r "$MARK" ] || exit 0
+alive &amp;&amp; exit 0
+/bin/sleep 3
+[ -r "$MARK" ] || exit 0
+alive &amp;&amp; exit 0
+if /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1'; then
+  /usr/bin/sudo -n /usr/bin/pmset -a disablesleep 0 || exit 1
+fi
+/bin/rm -f "$MARK"</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>60</integer>
+</dict>
+</plist>

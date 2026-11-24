@@ -19,7 +19,7 @@ No es un «caffeinate» genérico: está pensado para la pausa con la tapa cerra
 App de barra de menú de macOS. Se usa en segundos, justo antes de levantarse. Cambiar el ajuste (`pmset disablesleep`) pide la contraseña del Mac solo la primera vez: instala un permiso limitado a ese comando.
 
 ## Capabilities and Constraints
-- Duraciones: 15 min, 30 min, 1 h, 2 h o sin límite. Un proceso vigilante lleva el temporizador y la batería, con la tapa cerrada y con la app cerrada; al apagar o reiniciar, vuelve a lo normal.
+- Duraciones: 15 min, 30 min, 1 h, 2 h o sin límite. Un proceso vigilante lleva el temporizador y la batería, con la tapa cerrada y con la app cerrada; al apagar o reiniciar, vuelve a lo normal. Si el vigilante desaparece, una red de seguridad (LaunchAgent) lo devuelve a lo normal.
 - Detecta si Claude Code está abierto. No detecta otras herramientas: un proceso abierto no significa que esté trabajando.
 - Seguir en el móvil depende de Remote Control de Claude Code; la app solo enlaza y copia `/remote-control`.
 - macOS 13 o posterior.

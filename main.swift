@@ -372,6 +372,7 @@ final class Despierto: ObservableObject {
     @Published var selectedSessionID: String?
     @Published var launchAtLogin = false
     @Published var errorMessage: String?
+    @Published var noticeIcon = "battery.25percent"
     @Published var notice: String?               // aviso tranquilo (no es un error), p. ej. tras volver solo a lo normal
     @Published var brewedAt = Date.distantPast   // cuándo se activó (arranca la animación del vapor)
     @Published var authorizing = false           // pidiendo la contraseña
@@ -386,8 +387,16 @@ final class Despierto: ObservableObject {
     // Temporizador «de root» (solo si no se pudo instalar el permiso, o de versiones anteriores)
     private static let rootPidFile = "/var/run/despierto-timer.pid"
     private static let cancelRootTimer =
-        "if [ -f \(rootPidFile) ]; then kill $(cat \(rootPidFile)) 2>/dev/null; rm -f \(rootPidFile); fi"
+        "P=$(/bin/cat \(rootPidFile) 2>/dev/null); "
+        + "if [ -n \"$P\" ] && /bin/ps -ww -p \"$P\" -o args= | /usr/bin/grep -q '\(rootPidFile)'; then /bin/kill \"$P\"; fi; "
+        + "/bin/rm -f \(rootPidFile)"
     private static let timerMarker = "despierto-timer"
+
+    /// Existe mientras Despierto mantiene el Mac despierto; dentro, el PID del vigilante.
+    /// La red de seguridad (guard.plist) solo actúa si existe.
+    private static let activeMark = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Despierto/activo")
+    private static let guardAgent = SMAppService.agent(plistName: "local.despierto.guard.plist")
     private var timerProcess: Process?
 
     private var ticks = 0
@@ -447,13 +456,28 @@ final class Despierto: ObservableObject {
     }
 
     func stop() {
-        cancelTimer()
+        // Primero vuelve a lo normal: si cancelas la contraseña, el vigilante sigue en su sitio
         if !System.sudoPmset(0) {
             guard runAsAdmin(Self.setupScript(value: 0, rootTimerMinutes: nil), prompt: Self.setupPrompt) else { return }
             checkSetup()
         }
+        cancelTimer()
         saveDates(start: nil, end: nil)
         Haptics.tap()
+        refresh()
+    }
+
+    /// Vuelve a lo normal y quita todo lo que Despierto instaló fuera de la app.
+    func removePermissions() {
+        let script = "exec 2>&1; /bin/date; " + Self.cancelRootTimer
+            + "; /usr/bin/pmset -a disablesleep 0 && /bin/rm -f \(System.sudoersFile) && echo 'permiso quitado' || exit 1"
+        guard runAsAdmin(script, prompt: "Despierto va a volver a lo normal y quitar su permiso.") else { return }
+        cancelTimer()
+        saveDates(start: nil, end: nil)
+        try? Self.guardAgent.unregister()
+        try? SMAppService.mainApp.unregister()
+        noticeIcon = "checkmark.circle"
+        notice = "Permiso quitado. Si quieres desinstalar Despierto, ya puedes borrar la app."
         refresh()
     }
 
@@ -472,9 +496,8 @@ final class Despierto: ObservableObject {
     /// (comprobado con visudo antes de guardarlo) y hace el cambio. Si el permiso no se
     /// pudo instalar, el temporizador lo lleva un proceso de root como antes.
     private static func setupScript(value: Int, rootTimerMinutes minutes: Int?) -> String {
-        // Cada paso queda apuntado en ~/Library/Logs/Despierto-setup.log por si algo falla
-        let log = setupLogPath
-        var script = "exec >>'\(log)' 2>&1; echo; date; " + cancelRootTimer
+        // Root no escribe en la carpeta del usuario: devuelve cada paso y la app lo apunta en el log
+        var script = "exec 2>&1; /bin/date; " + cancelRootTimer
         let user = NSUserName()
         if user.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil {
             let rule = "\(user) ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
@@ -482,14 +505,14 @@ final class Despierto: ObservableObject {
                 + " && printf '%s\\n' '# Despierto: activar o desactivar disablesleep sin contrasena' '\(rule)' > \"$T\" && echo '2 regla escrita'"
                 + " && /usr/sbin/visudo -cf \"$T\" && echo '3 regla valida'"
                 + " && /usr/bin/install -m 0440 -o root -g wheel \"$T\" \(System.sudoersFile) && echo '4 permiso guardado'"
-                + "; rm -f \"$T\""
+                + "; /bin/rm -f \"$T\""
         } else {
             script += "; echo 'nombre de usuario raro: no se instala el permiso'"
         }
-        script += "; /usr/bin/pmset -a disablesleep \(value) && echo '5 pmset \(value) ok'; /bin/chmod 644 '\(log)'"
+        script += "; /usr/bin/pmset -a disablesleep \(value) && echo '5 pmset \(value) ok' || exit 1"
         if let minutes {
             script += "; if [ ! -f \(System.sudoersFile) ]; then"
-                + " /bin/sh -c 'sleep \(minutes * 60); /usr/bin/pmset -a disablesleep 0; rm -f \(rootPidFile)' >/dev/null 2>&1 &"
+                + " /bin/sh -c '/bin/sleep \(minutes * 60); /usr/bin/pmset -a disablesleep 0; /bin/rm -f \(rootPidFile)' >/dev/null 2>&1 &"
                 + " echo $! > \(rootPidFile); fi"
         }
         return script
@@ -503,11 +526,12 @@ final class Despierto: ObservableObject {
         let endEpoch = end.map { Int($0.timeIntervalSince1970) } ?? 0
         return """
         END=\(endEpoch); LIMIT=\(lowBatteryLimit)
-        normal() { /usr/bin/sudo -n /usr/bin/pmset -a disablesleep 0; }
+        MARK="$HOME/Library/Application Support/Despierto/activo"
+        normal() { /usr/bin/sudo -n /usr/bin/pmset -a disablesleep 0 && /bin/rm -f "$MARK"; }
         trap 'kill $! 2>/dev/null; exit 0' USR1
         trap 'kill $! 2>/dev/null; normal; exit 0' TERM HUP
         while :; do
-          /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1' || exit 0
+          /usr/bin/pmset -g | /usr/bin/grep -q 'SleepDisabled[[:space:]]*1' || { /bin/rm -f "$MARK"; exit 0; }
           NOW=$(/bin/date +%s); WAIT=30
           if [ "$END" -gt 0 ]; then
             [ "$NOW" -ge "$END" ] && break
@@ -536,8 +560,23 @@ final class Despierto: ObservableObject {
             try process.run()
             timerProcess = process
             UserDefaults.standard.set(Int(process.processIdentifier), forKey: "timerPID")
+            markActive(pid: process.processIdentifier)
+            registerGuard()
         } catch {
             errorMessage = "No se pudo poner el temporizador: \(error.localizedDescription)"
+        }
+    }
+
+    private func markActive(pid: Int32) {
+        try? FileManager.default.createDirectory(at: Self.activeMark.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("\(pid)\n".utf8).write(to: Self.activeMark, options: .atomic)
+    }
+
+    /// Si se desactivó a mano en Ajustes del Sistema (`requiresApproval`), se respeta.
+    private func registerGuard() {
+        switch Self.guardAgent.status {
+        case .enabled, .requiresApproval: break
+        default: try? Self.guardAgent.register()
         }
     }
 
@@ -549,13 +588,20 @@ final class Despierto: ObservableObject {
     /// Al abrir la app (p. ej. tras un reinicio): si el Mac sigue despierto pero el vigilante ya no está,
     /// vuelve a lo normal si la pausa ya se pasó de hora o pone otro vigilante para lo que queda.
     private func recoverWatchdog() {
-        guard System.sleepDisabled(), System.passwordless, !watchdogAlive else { return }
+        guard System.sleepDisabled(), System.passwordless else { return }
+        if watchdogAlive {
+            markActive(pid: Int32(UserDefaults.standard.integer(forKey: "timerPID")))
+            registerGuard()
+            return
+        }
         if let endDate, endDate <= Date() {
             guard System.sudoPmset(0) else { return }
+            try? FileManager.default.removeItem(at: Self.activeMark)
             saveDates(start: nil, end: nil)
+            noticeIcon = "cup.and.saucer"
             notice = "Tu pausa café terminó mientras Despierto estaba cerrado, así que ya volvió a lo normal."
-        } else {
-            startWatchdog(until: endDate)
+        } else if endDate != nil || FileManager.default.fileExists(atPath: Self.activeMark.path) {
+            startWatchdog(until: endDate) // solo si lo activó Despierto, no otro programa
         }
     }
 
@@ -579,6 +625,7 @@ final class Despierto: ObservableObject {
         guard System.sudoPmset(0) else { return }
         cancelTimer()
         isAwake = false
+        noticeIcon = "battery.25percent"
         notice = Self.lowBatteryNotice(percent: battery.percent, at: Date())
     }
 
@@ -586,6 +633,7 @@ final class Despierto: ObservableObject {
     private func cancelTimer() {
         let pid = Int32(UserDefaults.standard.integer(forKey: "timerPID"))
         UserDefaults.standard.removeObject(forKey: "timerPID")
+        try? FileManager.default.removeItem(at: Self.activeMark)
         timerProcess = nil
         guard pid > 0, System.isDespiertoTimer(pid: pid) else { return }
         kill(pid, SIGUSR1) // el vigilante para su `sleep` y sale sin tocar nada
@@ -610,6 +658,11 @@ final class Despierto: ObservableObject {
     func refresh() {
         let wasAwake = isAwake
         isAwake = System.sleepDisabled()
+        // Despierto pero sin vigilante (alguien lo cerró): se repone enseguida
+        if isAwake, FileManager.default.fileExists(atPath: Self.activeMark.path), !watchdogAlive {
+            recoverWatchdog()
+            isAwake = System.sleepDisabled()
+        }
         if isAwake && !wasAwake { brewedAt = Date() }
         battery = System.battery()
         if isAwake, let battery, Self.batteryTooLow(battery) { returnToNormal(lowBattery: battery) }
@@ -651,7 +704,8 @@ final class Despierto: ObservableObject {
             onAuthorizationEnd?()
         }
         var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
+        Self.appendSetupLog(error.map { $0[NSAppleScript.errorMessage] as? String ?? "error" } ?? result?.stringValue ?? "", to: Self.setupLogPath)
         if let error {
             // -128 = has pulsado «Cancelar»: no es un error.
             if (error[NSAppleScript.errorNumber] as? Int) != -128 {
@@ -661,6 +715,15 @@ final class Despierto: ObservableObject {
         }
         errorMessage = nil
         return true
+    }
+
+    /// El log lo escribe el usuario, nunca root. Se reemplaza entero porque las versiones
+    /// anteriores lo dejaban a nombre de root.
+    static func appendSetupLog(_ text: String, to path: String) {
+        let url = URL(fileURLWithPath: path)
+        let old = (try? Data(contentsOf: url))?.suffix(20_000) ?? Data()
+        let new = text.replacingOccurrences(of: "\r", with: "\n") + "\n\n"
+        try? (old + Data(new.utf8)).write(to: url, options: .atomic)
     }
 }
 
@@ -816,7 +879,7 @@ struct PanelView: View {
             }
             if let notice = model.notice {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Image(systemName: "battery.25percent")
+                    Image(systemName: model.noticeIcon)
                     Text(notice).fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.system(size: 11))
@@ -1236,17 +1299,17 @@ struct Footer: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             if let battery = model.battery {
                 let low = model.isAwake && !battery.charging && battery.percent <= 20
                 HStack(spacing: 5) {
                     Image(systemName: Format.batterySymbol(battery))
-                    Text(low ? "\(battery.percent) % · enchúfalo" : "\(battery.percent) %")
+                    Text(low ? "\(battery.percent) % · enchúfalo" : "\(battery.percent) %").lineLimit(1)
                 }
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(low ? AnyShapeStyle(Semantic.warn(scheme)) : AnyShapeStyle(.secondary))
             }
-            Spacer()
+            Spacer(minLength: 0)
             Button { withAnimation(Motion.curve(Motion.quick)) { model.toggleLaunchAtLogin() } } label: {
                 HStack(spacing: 4) {
                     Image(systemName: model.launchAtLogin ? "checkmark.circle.fill" : "circle")
@@ -1258,6 +1321,17 @@ struct Footer: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
+            if !model.needsSetup {
+                Button(action: showMenu) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.primary.opacity(0.08)))
+                }
+                .buttonStyle(PressStyle())
+                .help("Más opciones")
+                .accessibilityLabel("Más opciones")
+            }
             Button { NSApp.terminate(nil) } label: {
                 Image(systemName: "power")
                     .font(.system(size: 11, weight: .semibold))
@@ -1267,6 +1341,16 @@ struct Footer: View {
             .buttonStyle(PressStyle())
             .help("Salir de Despierto")
         }
+    }
+
+    private func showMenu() {
+        let menu = NSMenu()
+        let action = MenuAction { model.removePermissions() }
+        let item = NSMenuItem(title: "Volver a lo normal y quitar permisos…", action: #selector(MenuAction.run), keyEquivalent: "")
+        item.target = action
+        item.representedObject = action
+        menu.addItem(item)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 }
 
